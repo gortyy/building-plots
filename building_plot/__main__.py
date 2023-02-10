@@ -1,4 +1,5 @@
 import asyncio
+from math import isnan
 
 from beanie import init_beanie
 from geopy.geocoders import Nominatim
@@ -10,7 +11,6 @@ from typer import Typer
 
 from building_plot.geocoder import Geocoder, LatLong
 from building_plot.models import BuildingPlot, Location
-from building_plot.repository import Repository
 from building_plot.scraper import Scraper
 from building_plot.settings import settings
 
@@ -22,14 +22,18 @@ def scrape(url: str):
     async def _scrape():
         session = HTMLSession(mock_browser=True)
         scraper = Scraper(session)
-        repository = await get_repository()
-        geocoder = Geocoder(Nominatim(user_agent="building-plots"), repository)
+        await init_db()
+        geocoder = Geocoder(Nominatim(user_agent="building-plots"))
 
         plots = []
-        for listing in scraper.scrape(url):
+        async for listing in scraper.scrape(url):
             location = listing["location"]
-            lat_long = await geocoder.get_lat_long(location)
-            if lat_long is not None:
+            lat_long = await geocoder.get_location_lat_long(location)
+            if (
+                lat_long is not None
+                and not isnan(lat_long.lat)
+                and not isnan(lat_long.long)
+            ):
                 distance = geocoder.calculate_distance(
                     lat_long, LatLong(lat=50.0619474, long=19.9368564)
                 )
@@ -51,8 +55,8 @@ def scrape(url: str):
 @app.command()
 def list_all():
     async def _list():
-        repository = await get_repository()
-        plots = await repository.get_building_plots(
+        await init_db()
+        plots = await BuildingPlot.get_building_plots(
             area_from=0, area_to=10_000, price_from=0, price_to=200_000
         )
 
@@ -63,10 +67,9 @@ def list_all():
     asyncio.run(_list())
 
 
-async def get_repository() -> Repository:
+async def init_db():
     client = AsyncIOMotorClient(settings.mongo_connection_string)
     await init_beanie(client.building_plots, document_models=[Location, BuildingPlot])
-    return Repository
 
 
 if __name__ == "__main__":
